@@ -15,7 +15,7 @@ ezButton button1(3);
 const int LED = 4;          
 const int RELAY = 5;          
 const int DEBOUNCE_DELAY = 70;
-const int TIMEOUT = 5;
+const int TIMEOUT = 5;             // in minutes
 const int LONG_PRESS_TIME  = 2000; // 2000 milliseconds
 
 byte localAddress = 0xDF;     // address of this device
@@ -24,6 +24,7 @@ boolean asked;
 boolean relaystatus;
 byte msgCount = 0;            // count of outgoing messages
 long lastSendTime = 0;        // last send time
+long lastBlinkTime = 0;
 long interval = 60000;          // interval between sends
 byte counterTimer = 0;
 boolean timerRunning = false;
@@ -57,18 +58,11 @@ void loop() {
 
   // if relay status changed or house asked for report, report the relay status
   if (relaystatus != digitalRead(RELAY) || asked){
-     String message = "led off";
+     String message = "relay off";
      if (digitalRead(RELAY) == HIGH){
-        message = "led on";
+        message = "relay on";
      } 
-     LoRa.beginPacket();                   // start packet
-     LoRa.write(destination);              // add destination address
-     LoRa.write(localAddress);             // add sender address
-     LoRa.write(msgCount);                 // add message ID
-     LoRa.write(message.length());        // add payload length
-     LoRa.print(message);                 // add payload
-     LoRa.endPacket(true);                     // finish packet and send it
-     msgCount++;                           // increment message ID
+     sendMessage(message);
      Serial.println("Reporting to house control: " + message);
      asked = false;
   }
@@ -76,11 +70,7 @@ void loop() {
 
   if(button1.isPressed()){
     Serial.println("The button is pressed");
-    digitalWrite(RELAY, !digitalRead(RELAY));   // Toggle the relay
-    digitalWrite(LED, !digitalRead(LED));   // Toggle the relay
-
     pressedTime = millis();
-    timerRunning = false;
   }
   if(button1.isReleased()){
     Serial.println("The button is released");
@@ -90,8 +80,17 @@ void loop() {
     if( pressDuration > LONG_PRESS_TIME ){
       Serial.println("A long press is detected, turn on Relay and time it");
       digitalWrite(RELAY, HIGH);
-      digitalWrite(LED, HIGH);
+      digitalWrite(LED, digitalRead(RELAY));   // update the led
       timerRunning = true;
+      sendMessage("timer");
+    } else { // SHORT PRESS detected
+      digitalWrite(RELAY, !digitalRead(RELAY));   // Toggle the relay
+      digitalWrite(LED, digitalRead(RELAY));   // update the led
+      if (timerRunning) {
+        asked = true;
+        counterTimer = 0;
+        timerRunning = false;      
+      }
     }
   }
   checkTimer();
@@ -125,15 +124,24 @@ void checkReceived(){
   
     if (incoming == "toggle"){
         digitalWrite(RELAY, !digitalRead(RELAY));   // Toggle the relay
-        digitalWrite(LED, !digitalRead(LED));   // Toggle the relay
+        digitalWrite(LED, digitalRead(RELAY));   // Toggle the relay
+        timerRunning = false;
     }
-  
+
     if (incoming == "asking"){
       asked = true;
     }else{
       asked = false;
     }
-
+    
+    if (incoming == "timer"){
+        digitalWrite(RELAY, HIGH);
+        digitalWrite(LED, HIGH);
+        timerRunning = true;
+        counterTimer = 0;
+        asked = true;            // to report back that status changed
+    }
+  
     // if message is for this device, or broadcast, print details:
     Serial.println("Received from: 0x" + String(sender, HEX));
     Serial.println("Sent to: 0x" + String(recipient, HEX));
@@ -155,10 +163,10 @@ void checkTimer(){
       counterTimer++;
       Serial.println("Timer in minutes " + counterTimer);
     }
-    delay(250);
-    digitalWrite(LED, !digitalRead(LED));   // Toggle the relay
-    delay(250);
-    digitalWrite(LED, !digitalRead(LED));   // Toggle the relay
+    if ((millis() - lastBlinkTime) > 250) {
+      lastBlinkTime = millis();
+      digitalWrite(LED, !digitalRead(LED));   // Toggle the led
+    }
     if (counterTimer == TIMEOUT){
       Serial.println("Timeout");
       counterTimer = 0;
@@ -167,4 +175,15 @@ void checkTimer(){
       timerRunning = false;
     }
   }
+}
+
+void sendMessage(String outgoing) {
+  LoRa.beginPacket();                   // start packet
+  LoRa.write(destination);              // add destination address
+  LoRa.write(localAddress);             // add sender address
+  LoRa.write(msgCount);                 // add message ID
+  LoRa.write(outgoing.length());        // add payload length
+  LoRa.print(outgoing);                 // add payload
+  LoRa.endPacket(true);                     // finish packet and send it
+  msgCount++;                           // increment message ID
 }
