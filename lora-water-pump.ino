@@ -12,40 +12,53 @@
 #include <ezButton.h>
 
 ezButton button1(3);
-
-const int relay = 5;          
+const int LED = 4;          
+const int RELAY = 5;          
 const int DEBOUNCE_DELAY = 70;
+const int TIMEOUT = 5;
+const int LONG_PRESS_TIME  = 2000; // 2000 milliseconds
 
 byte localAddress = 0xDF;     // address of this device
 byte destination = 0xDA;      // destination to send to
 boolean asked;
 boolean relaystatus;
 byte msgCount = 0;            // count of outgoing messages
+long lastSendTime = 0;        // last send time
+long interval = 60000;          // interval between sends
+byte counterTimer = 0;
+boolean timerRunning = false;
+unsigned long pressedTime  = 0;
+unsigned long releasedTime = 0;
 
 void setup() {
   Serial.begin(9600);
   while (!Serial);
 
   Serial.println("LoRa Relay Pump Terra Nostra");
-  pinMode(relay, OUTPUT);     // Initialize the LED_BUILTIN pin as an output
+  pinMode(RELAY, OUTPUT);     // Initialize the RELAY pin as an output
+  pinMode(LED, OUTPUT);     // Initialize the RELAY pin as an output
+
   button1.setDebounceTime(DEBOUNCE_DELAY);     
   
   if (!LoRa.begin(915E6)) {
     Serial.println("Starting LoRa failed!");
     while (1);
   }
-  digitalWrite(relay, LOW);              // after restart make sure relay is off
+  digitalWrite(RELAY, LOW);    // after restart make sure relay is off
+  digitalWrite(LED, LOW);    // after restart make sure led is off
+  lastSendTime = millis(); 
 }
 
 void loop() {
+
    button1.loop();
    
    checkReceived();
 
   // if relay status changed or house asked for report, report the relay status
-  if (relaystatus != digitalRead(relay) || asked){
+  if (relaystatus != digitalRead(RELAY) || asked){
      String message = "led off";
-     if (digitalRead(relay) == HIGH){
+     if (digitalRead(RELAY) == HIGH){
         message = "led on";
      } 
      LoRa.beginPacket();                   // start packet
@@ -59,14 +72,29 @@ void loop() {
      Serial.println("Reporting to house control: " + message);
      asked = false;
   }
-  relaystatus = digitalRead(relay);
+  relaystatus = digitalRead(RELAY);
 
   if(button1.isPressed()){
     Serial.println("The button is pressed");
-    digitalWrite(relay, !digitalRead(relay));   // Toggle the relay
+    digitalWrite(RELAY, !digitalRead(RELAY));   // Toggle the relay
+    digitalWrite(LED, !digitalRead(LED));   // Toggle the relay
+
+    pressedTime = millis();
+    timerRunning = false;
   }
-  if(button1.isReleased())
+  if(button1.isReleased()){
     Serial.println("The button is released");
+    releasedTime = millis();
+    long pressDuration = releasedTime - pressedTime;
+
+    if( pressDuration > LONG_PRESS_TIME ){
+      Serial.println("A long press is detected, turn on Relay and time it");
+      digitalWrite(RELAY, HIGH);
+      digitalWrite(LED, HIGH);
+      timerRunning = true;
+    }
+  }
+  checkTimer();
 
 }
 
@@ -96,7 +124,8 @@ void checkReceived(){
     }
   
     if (incoming == "toggle"){
-        digitalWrite(relay, !digitalRead(relay));   // Toggle the relay
+        digitalWrite(RELAY, !digitalRead(RELAY));   // Toggle the relay
+        digitalWrite(LED, !digitalRead(LED));   // Toggle the relay
     }
   
     if (incoming == "asking"){
@@ -117,4 +146,25 @@ void checkReceived(){
     
   } // end read package
   
+}
+
+void checkTimer(){
+  if (timerRunning){
+    if ((millis() - lastSendTime) > interval) {
+      lastSendTime = millis();
+      counterTimer++;
+      Serial.println("Timer in minutes " + counterTimer);
+    }
+    delay(250);
+    digitalWrite(LED, !digitalRead(LED));   // Toggle the relay
+    delay(250);
+    digitalWrite(LED, !digitalRead(LED));   // Toggle the relay
+    if (counterTimer == TIMEOUT){
+      Serial.println("Timeout");
+      counterTimer = 0;
+      digitalWrite(RELAY, LOW);
+      digitalWrite(LED, LOW);
+      timerRunning = false;
+    }
+  }
 }
